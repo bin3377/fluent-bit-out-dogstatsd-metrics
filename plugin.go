@@ -15,8 +15,13 @@ import (
 )
 
 const (
-	MetricsConfigTypeCount = "count"
-	MetricsConfigTypeGauge = "gauge"
+	MetricsTypeCount          = "count"
+	MetricsTypeCountIncrement = "count_inc"
+	MetricsTypeCountDecrement = "count_dec"
+	MetricsTypeGauge          = "gauge"
+	MetricsTypeSet            = "set"
+	MetricsTypeHistogram      = "histogram"
+	MetricsTypeDistribution   = "distribution"
 )
 
 func NewPluginContext(plugin unsafe.Pointer) (*PluginContext, error) {
@@ -51,40 +56,42 @@ type PluginContext struct {
 }
 
 type MetricsConfig struct {
-	CountConfig
-	GaugeConfig
 	Type        string
 	Name        string
 	Namespace   string
 	SampleRate  float64
+	ValueField  string
 	StaticTags  map[string]string
 	DynamicTags []string
 }
 
-type CountConfig struct {
-	Method string
-}
-
-type GaugeConfig struct {
-	ValueField string
-}
-
 func (c *PluginContext) send(record map[string]interface{}) (err error) {
 	tags := c.getTags(record)
-	switch c.Type {
-	case MetricsConfigTypeCount:
-		c.Debug("msg", "send called", "type", c.Type, "name", c.Name, "tags", tags, "rate", c.SampleRate)
-		return c.Client.Incr(c.Name, tags, c.SampleRate)
-	case MetricsConfigTypeGauge:
-		value := float64(0)
-		if c.ValueField != "" {
-			value, err = strconv.ParseFloat(fmt.Sprintf("%s", record[c.ValueField]), 64)
-			if err != nil {
-				return
-			}
+	value := ""
+	if c.ValueField != "" {
+		switch t := record[c.ValueField].(type) {
+		case string:
+			value = t
+		default:
+			c.Warn("msg", "value field is not a string", "value_field", c.ValueField)
 		}
-		c.Debug("msg", "send called", "type", c.Type, "name", c.Name, "value", value, "tags", tags, "rate", c.SampleRate)
-		return c.Client.Gauge(c.Name, value, tags, c.SampleRate)
+	}
+	c.Debug("msg", "send called", "type", c.Type, "name", c.Name, "value", value, "tags", tags, "rate", c.SampleRate)
+	switch c.Type {
+	case MetricsTypeCountIncrement:
+		return c.Client.Incr(c.Name, tags, c.SampleRate)
+	case MetricsTypeCountDecrement:
+		return c.Client.Decr(c.Name, tags, c.SampleRate)
+	case MetricsTypeCount:
+		return c.Client.Count(c.Name, extractInt(value), tags, c.SampleRate)
+	case MetricsTypeGauge:
+		return c.Client.Gauge(c.Name, extractFloat(value), tags, c.SampleRate)
+	case MetricsTypeSet:
+		return c.Client.Set(c.Name, value, tags, c.SampleRate)
+	case MetricsTypeHistogram:
+		return c.Client.Histogram(c.Name, extractFloat(value), tags, c.SampleRate)
+	case MetricsTypeDistribution:
+		return c.Client.Distribution(c.Name, extractFloat(value), tags, c.SampleRate)
 	default:
 		return fmt.Errorf("unsupported metric type %s", c.Type)
 	}
@@ -95,7 +102,9 @@ func (c *PluginContext) getTags(record map[string]interface{}) (tags []string) {
 		if v, ok := record[dTag]; ok {
 			switch t := v.(type) {
 			case string:
-				tags = append(tags, fmt.Sprintf("%s:%s", dTag, t))
+				if strings.TrimSpace(t) != "" {
+					tags = append(tags, fmt.Sprintf("%s:%s", dTag, t))
+				}
 			default:
 				c.Warn("msg", "dynamic tag is not a string", "tag", dTag)
 			}
@@ -179,26 +188,16 @@ func initConfig(plugin unsafe.Pointer) (*MetricsConfig, error) {
 	}
 	dynamicTags := sliceConf(plugin, "metric_dynamic_tags", nil)
 
+	valueField := stringConf(plugin, "value_field", "")
+
 	config := MetricsConfig{
 		Type:        metricType,
 		Name:        metricName,
 		SampleRate:  sampleRate,
+		ValueField:  valueField,
 		StaticTags:  staticTags,
 		DynamicTags: dynamicTags,
 	}
-
-	switch metricType {
-	case MetricsConfigTypeCount:
-	case MetricsConfigTypeGauge:
-		valueField := stringConf(plugin, "value_field", "")
-		if valueField == "" {
-			return nil, fmt.Errorf("value_field is required for gauge metric")
-		}
-		config.ValueField = valueField
-	default:
-		return nil, fmt.Errorf("unknown metric type %s", metricType)
-	}
-
 	return &config, nil
 }
 
@@ -284,4 +283,24 @@ func toStringMap(record map[interface{}]interface{}) map[string]interface{} {
 	}
 
 	return m
+}
+
+func extractFloat(in string) float64 {
+	value := float64(0)
+	if in != "" {
+		if v, err := strconv.ParseFloat(in, 64); err == nil {
+			value = v
+		}
+	}
+	return value
+}
+
+func extractInt(in string) int64 {
+	value := int64(0)
+	if in != "" {
+		if v, err := strconv.ParseInt(in, 0, 64); err == nil {
+			value = v
+		}
+	}
+	return value
 }
