@@ -106,7 +106,11 @@ func (c *PluginContext) getTags(record map[string]interface{}) (tags []string) {
 					tags = append(tags, fmt.Sprintf("%s:%s", dTag, t))
 				}
 			default:
-				c.Warn("msg", "dynamic tag is not a string", "tag", dTag)
+				str := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", t)))
+				// hack way to convert any non-nil fields to a string (reflection has performance problem)
+				if str != "" && !strings.Contains(str, "nil") {
+					tags = append(tags, fmt.Sprintf("%s:%s", dTag, str))
+				}
 			}
 		}
 	}
