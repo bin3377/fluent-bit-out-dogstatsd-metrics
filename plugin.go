@@ -67,14 +67,9 @@ type MetricsConfig struct {
 
 func (c *PluginContext) send(record map[string]interface{}) (err error) {
 	tags := c.getTags(record)
-	value := ""
+	var value interface{}
 	if c.ValueField != "" {
-		switch t := record[c.ValueField].(type) {
-		case string:
-			value = t
-		default:
-			c.Warn("msg", "value field is not a string", "value_field", c.ValueField)
-		}
+		value = record[c.ValueField]
 	}
 	c.Debug("msg", "send called", "type", c.Type, "name", c.Name, "value", value, "tags", tags, "rate", c.SampleRate)
 	switch c.Type {
@@ -87,7 +82,7 @@ func (c *PluginContext) send(record map[string]interface{}) (err error) {
 	case MetricsTypeGauge:
 		return c.Client.Gauge(c.Name, extractFloat(value), tags, c.SampleRate)
 	case MetricsTypeSet:
-		return c.Client.Set(c.Name, value, tags, c.SampleRate)
+		return c.Client.Set(c.Name, fmt.Sprintf("%v", value), tags, c.SampleRate)
 	case MetricsTypeHistogram:
 		return c.Client.Histogram(c.Name, extractFloat(value), tags, c.SampleRate)
 	case MetricsTypeDistribution:
@@ -289,20 +284,36 @@ func toStringMap(record map[interface{}]interface{}) map[string]interface{} {
 	return m
 }
 
-func extractFloat(in string) float64 {
+func extractFloat(in interface{}) float64 {
 	value := float64(0)
-	if in != "" {
-		if v, err := strconv.ParseFloat(in, 64); err == nil {
+	switch t := in.(type) {
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	default:
+		if v, err := strconv.ParseFloat(fmt.Sprintf("%v", in), 64); err == nil {
 			value = v
 		}
 	}
 	return value
 }
 
-func extractInt(in string) int64 {
+func extractInt(in interface{}) int64 {
 	value := int64(0)
-	if in != "" {
-		if v, err := strconv.ParseInt(in, 0, 64); err == nil {
+	switch t := in.(type) {
+	case int64:
+		return t
+	case int16:
+		return int64(t)
+	case int32:
+		return int64(t)
+	case int8:
+		return int64(t)
+	case int:
+		return int64(t)
+	default:
+		if v, err := strconv.ParseInt(fmt.Sprintf("%v", in), 0, 64); err == nil {
 			value = v
 		}
 	}
